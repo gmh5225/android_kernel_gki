@@ -808,6 +808,10 @@ static int __init sunxi_mc_smp_init(void)
 			break;
 	}
 
+	of_node_put(node);
+	if (ret < 0)
+		return -ENODEV;
+
 	is_a83t = sunxi_mc_smp_data[i].is_a83t;
 
 	of_node_put(node);
