@@ -44,7 +44,6 @@
 #include <linux/kthread.h>
 #include <linux/init.h>
 #include <linux/mmu_notifier.h>
-#include <linux/cred.h>
 
 #include <asm/tlb.h>
 #include "internal.h"
@@ -752,8 +751,6 @@ static void __mark_oom_victim(struct task_struct *tsk)
  */
 static void mark_oom_victim(struct task_struct *tsk)
 {
-	const struct cred *cred;
-
 	WARN_ON(oom_killer_disabled);
 	/* OOM killer might race with memcg OOM */
 	if (test_and_set_tsk_thread_flag(tsk, TIF_MEMDIE))
@@ -770,9 +767,7 @@ static void mark_oom_victim(struct task_struct *tsk)
 	 */
 	__thaw_task(tsk);
 	atomic_inc(&oom_victims);
-	cred = get_task_cred(tsk);
-	trace_mark_victim(tsk, cred->uid.val);
-	put_cred(cred);
+	trace_mark_victim(tsk->pid);
 }
 
 /**
@@ -1102,6 +1097,10 @@ bool out_of_memory(struct oom_control *oc)
 {
 	unsigned long freed = 0;
 
+	/* Return true since Simple LMK automatically kills in the background */
+	if (IS_ENABLED(CONFIG_ANDROID_SIMPLE_LMK))
+		return true;
+
 	if (oom_killer_disabled)
 		return false;
 
@@ -1198,6 +1197,7 @@ void pagefault_out_of_memory(void)
 		pr_warn("Huh VM_FAULT_OOM leaked out to the #PF handler. Retrying PF\n");
 }
 
+#ifndef CONFIG_ANDROID_SIMPLE_LMK
 SYSCALL_DEFINE2(process_mrelease, int, pidfd, unsigned int, flags)
 {
 #ifdef CONFIG_MMU
@@ -1276,6 +1276,7 @@ put_pid:
 	return -ENOSYS;
 #endif /* CONFIG_MMU */
 }
+#endif
 
 void add_to_oom_reaper(struct task_struct *p)
 {
