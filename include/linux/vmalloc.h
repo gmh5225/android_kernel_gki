@@ -9,7 +9,6 @@
 #include <asm/page.h>		/* pgprot_t */
 #include <linux/rbtree.h>
 #include <linux/overflow.h>
-#include <linux/android_vendor.h>
 
 #include <asm/vmalloc.h>
 
@@ -58,7 +57,6 @@ struct vm_struct {
 	unsigned int		nr_pages;
 	phys_addr_t		phys_addr;
 	const void		*caller;
-	ANDROID_OEM_DATA(1);
 };
 
 struct vmap_area {
@@ -69,10 +67,11 @@ struct vmap_area {
 	struct list_head list;          /* address sorted list */
 
 	/*
-	 * The following two variables can be packed, because
-	 * a vmap_area object can be either:
+	 * The following three variables can be packed, because
+	 * a vmap_area object is always one of the three states:
 	 *    1) in "free" tree (root is vmap_area_root)
-	 *    2) or "busy" tree (root is free_vmap_area_root)
+	 *    2) in "busy" tree (root is free_vmap_area_root)
+	 *    3) in purge list  (head is vmap_purge_list)
 	 */
 	union {
 		unsigned long subtree_max_size; /* in "free" tree */
@@ -112,6 +111,11 @@ extern void *__vmalloc_node_range(unsigned long size, unsigned long align,
 			const void *caller);
 void *__vmalloc_node(unsigned long size, unsigned long align, gfp_t gfp_mask,
 		int node, const void *caller);
+
+extern void *__vmalloc_array(size_t n, size_t size, gfp_t flags);
+extern void *vmalloc_array(size_t n, size_t size);
+extern void *__vcalloc(size_t n, size_t size, gfp_t flags);
+extern void *vcalloc(size_t n, size_t size);
 
 extern void vfree(const void *addr);
 extern void vfree_atomic(const void *addr);
@@ -243,8 +247,5 @@ pcpu_free_vm_areas(struct vm_struct **vms, int nr_vms)
 
 int register_vmap_purge_notifier(struct notifier_block *nb);
 int unregister_vmap_purge_notifier(struct notifier_block *nb);
-
-/* Allow disabling lazy TLB flushing */
-extern bool lazy_vunmap_enable;
 
 #endif /* _LINUX_VMALLOC_H */

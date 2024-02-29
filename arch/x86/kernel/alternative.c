@@ -939,10 +939,23 @@ extern struct paravirt_patch_site __start_parainstructions[],
  *
  * See entry_{32,64}.S for more details.
  */
-static void __init __no_sanitize_address notrace int3_magic(unsigned int *ptr)
-{
-	*ptr = 1;
-}
+
+/*
+ * We define the int3_magic() function in assembly to control the calling
+ * convention such that we can 'call' it from assembly.
+ */
+
+extern void int3_magic(unsigned int *ptr); /* defined in asm */
+
+asm (
+"	.pushsection	.init.text, \"ax\", @progbits\n"
+"	.type		int3_magic, @function\n"
+"int3_magic:\n"
+"	movl	$1, (%" _ASM_ARG1 ")\n"
+	ASM_RET
+"	.size		int3_magic, .-int3_magic\n"
+"	.popsection\n"
+);
 
 extern __initdata unsigned long int3_selftest_ip; /* defined in asm below */
 
@@ -1080,8 +1093,8 @@ void __init_or_module text_poke_early(void *addr, const void *opcode,
 	} else {
 		local_irq_save(flags);
 		memcpy(addr, opcode, len);
-		local_irq_restore(flags);
 		sync_core();
+		local_irq_restore(flags);
 
 		/*
 		 * Could also do a CLFLUSH here to speed up CPU recovery; but

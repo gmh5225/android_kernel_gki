@@ -137,6 +137,12 @@ static enum qcom_scm_convention __get_convention(void)
 		return qcom_scm_convention;
 
 	/*
+	 * Per the "SMC calling convention specification", the 64-bit calling
+	 * convention can only be used when the client is 64-bit, otherwise
+	 * system will encounter the undefined behaviour.
+	 */
+#if IS_ENABLED(CONFIG_ARM64)
+	/*
 	 * Device isn't required as there is only one argument - no device
 	 * needed to dma_map_single to secure world
 	 */
@@ -156,6 +162,7 @@ static enum qcom_scm_convention __get_convention(void)
 		forced = true;
 		goto found;
 	}
+#endif
 
 	probed_convention = SMC_CONVENTION_ARM_32;
 	ret = __scm_smc_call(NULL, &desc, probed_convention, &res, true);
@@ -968,11 +975,8 @@ EXPORT_SYMBOL(qcom_scm_ice_available);
  * qcom_scm_ice_invalidate_key() - Invalidate an inline encryption key
  * @index: the keyslot to invalidate
  *
- * The UFSHCI and eMMC standards define a standard way to do this, but it
- * doesn't work on these SoCs; only this SCM call does.
- *
- * It is assumed that the SoC has only one ICE instance being used, as this SCM
- * call doesn't specify which ICE instance the keyslot belongs to.
+ * The UFSHCI standard defines a standard way to do this, but it doesn't work on
+ * these SoCs; only this SCM call does.
  *
  * Return: 0 on success; -errno on failure.
  */
@@ -1001,13 +1005,10 @@ EXPORT_SYMBOL(qcom_scm_ice_invalidate_key);
  *		    units, e.g. 1 = 512 bytes, 8 = 4096 bytes, etc.
  *
  * Program a key into a keyslot of Qualcomm ICE (Inline Crypto Engine), where it
- * can then be used to encrypt/decrypt UFS or eMMC I/O requests inline.
+ * can then be used to encrypt/decrypt UFS I/O requests inline.
  *
- * The UFSHCI and eMMC standards define a standard way to do this, but it
- * doesn't work on these SoCs; only this SCM call does.
- *
- * It is assumed that the SoC has only one ICE instance being used, as this SCM
- * call doesn't specify which ICE instance the keyslot belongs to.
+ * The UFSHCI standard defines a standard way to do this, but it doesn't work on
+ * these SoCs; only this SCM call does.
  *
  * Return: 0 on success; -errno on failure.
  */
@@ -1289,7 +1290,6 @@ static const struct of_device_id qcom_scm_dt_match[] = {
 	{ .compatible = "qcom,scm" },
 	{}
 };
-MODULE_DEVICE_TABLE(of, qcom_scm_dt_match);
 
 static struct platform_driver qcom_scm_driver = {
 	.driver = {
@@ -1305,6 +1305,3 @@ static int __init qcom_scm_init(void)
 	return platform_driver_register(&qcom_scm_driver);
 }
 subsys_initcall(qcom_scm_init);
-
-MODULE_DESCRIPTION("Qualcomm Technologies, Inc. SCM driver");
-MODULE_LICENSE("GPL v2");

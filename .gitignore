@@ -41,7 +41,6 @@
 *.so.dbg
 *.su
 *.symtypes
-*.symversions
 *.tab.[ch]
 *.tar
 *.xz
@@ -155,11 +154,5 @@ x509.genkey
 # Clang's compilation database file
 /compile_commands.json
 
-# Object directory
-out/
-
 # Documentation toolchain
 sphinx_*/
-
-build.log
-kernel.log

@@ -54,11 +54,34 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/migrate.h>
-#undef CREATE_TRACE_POINTS
-#include <trace/hooks/mm.h>
-#include <trace/hooks/vmscan.h>
 
 #include "internal.h"
+
+/*
+ * migrate_prep() needs to be called before we start compiling a list of pages
+ * to be migrated using isolate_lru_page(). If scheduling work on other CPUs is
+ * undesirable, use migrate_prep_local()
+ */
+int migrate_prep(void)
+{
+	/*
+	 * Clear the LRU lists so pages can be isolated.
+	 * Note that pages may be moved off the LRU after we have
+	 * drained them. Those pages will fail to migrate like other
+	 * pages that may be busy.
+	 */
+	lru_add_drain_all();
+
+	return 0;
+}
+
+/* Do the necessary work of migrate_prep but not if it involves other CPUs */
+int migrate_prep_local(void)
+{
+	lru_add_drain();
+
+	return 0;
+}
 
 int isolate_movable_page(struct page *page, isolate_mode_t mode)
 {
@@ -108,7 +131,7 @@ int isolate_movable_page(struct page *page, isolate_mode_t mode)
 
 	/* Driver shouldn't use PG_isolated bit of page->flags */
 	WARN_ON_ONCE(PageIsolated(page));
-	SetPageIsolated(page);
+	__SetPageIsolated(page);
 	unlock_page(page);
 
 	return 0;
@@ -132,7 +155,7 @@ void putback_movable_page(struct page *page)
 
 	mapping = page_mapping(page);
 	mapping->a_ops->putback_page(page);
-	ClearPageIsolated(page);
+	__ClearPageIsolated(page);
 }
 
 /*
@@ -165,7 +188,7 @@ void putback_movable_pages(struct list_head *l)
 			if (PageMovable(page))
 				putback_movable_page(page);
 			else
-				ClearPageIsolated(page);
+				__ClearPageIsolated(page);
 			unlock_page(page);
 			put_page(page);
 		} else {
@@ -175,7 +198,6 @@ void putback_movable_pages(struct list_head *l)
 		}
 	}
 }
-EXPORT_SYMBOL_GPL(putback_movable_pages);
 
 /*
  * Restore a potential migration pte to a working pte entry
@@ -220,7 +242,7 @@ static bool remove_migration_pte(struct page *page, struct vm_area_struct *vma,
 		 */
 		entry = pte_to_swp_entry(*pvmw.pte);
 		if (is_write_migration_entry(entry))
-			pte = maybe_mkwrite(pte, vma->vm_flags);
+			pte = maybe_mkwrite(pte, vma);
 		else if (pte_swp_uffd_wp(*pvmw.pte))
 			pte = pte_mkuffd_wp(pte);
 
@@ -314,7 +336,6 @@ void __migration_entry_wait(struct mm_struct *mm, pte_t *ptep,
 	if (!get_page_unless_zero(page))
 		goto out;
 	pte_unmap_unlock(ptep, ptl);
-	trace_android_vh_waiting_for_page_migration(page);
 	put_and_wait_on_page_locked(page);
 	return;
 out:
@@ -588,8 +609,6 @@ void migrate_page_states(struct page *newpage, struct page *page)
 {
 	int cpupid;
 
-	trace_android_vh_migrate_page_states(page, newpage);
-
 	if (PageError(page))
 		SetPageError(newpage);
 	if (PageReferenced(page))
@@ -607,7 +626,6 @@ void migrate_page_states(struct page *newpage, struct page *page)
 		SetPageChecked(newpage);
 	if (PageMappedToDisk(page))
 		SetPageMappedToDisk(newpage);
-	trace_android_vh_look_around_migrate_page(page, newpage);
 
 	/* Move dirty on pages not done by migrate_page_move_mapping() */
 	if (PageDirty(page))
@@ -705,32 +723,37 @@ static bool buffer_migrate_lock_buffers(struct buffer_head *head,
 							enum migrate_mode mode)
 {
 	struct buffer_head *bh = head;
-	struct buffer_head *failed_bh;
 
+	/* Simple case, sync compaction */
+	if (mode != MIGRATE_ASYNC) {
+		do {
+			lock_buffer(bh);
+			bh = bh->b_this_page;
+
+		} while (bh != head);
+
+		return true;
+	}
+
+	/* async case, we cannot block on lock_buffer so use trylock_buffer */
 	do {
 		if (!trylock_buffer(bh)) {
-			if (mode == MIGRATE_ASYNC)
-				goto unlock;
-			if (mode == MIGRATE_SYNC_LIGHT && !buffer_uptodate(bh))
-				goto unlock;
-			lock_buffer(bh);
+			/*
+			 * We failed to lock the buffer and cannot stall in
+			 * async migration. Release the taken locks
+			 */
+			struct buffer_head *failed_bh = bh;
+			bh = head;
+			while (bh != failed_bh) {
+				unlock_buffer(bh);
+				bh = bh->b_this_page;
+			}
+			return false;
 		}
 
 		bh = bh->b_this_page;
 	} while (bh != head);
-
 	return true;
-
-unlock:
-	/* We failed to lock the buffer and cannot stall. */
-	failed_bh = bh;
-	bh = head;
-	while (bh != failed_bh) {
-		unlock_buffer(bh);
-		bh = bh->b_this_page;
-	}
-
-	return false;
 }
 
 static int __buffer_migrate_page(struct address_space *mapping,
@@ -954,7 +977,7 @@ static int move_to_new_page(struct page *newpage, struct page *page,
 		VM_BUG_ON_PAGE(!PageIsolated(page), page);
 		if (!PageMovable(page)) {
 			rc = MIGRATEPAGE_SUCCESS;
-			ClearPageIsolated(page);
+			__ClearPageIsolated(page);
 			goto out;
 		}
 
@@ -976,7 +999,7 @@ static int move_to_new_page(struct page *newpage, struct page *page,
 			 * We clear PG_movable under page_lock so any compactor
 			 * cannot try to migrate this page.
 			 */
-			ClearPageIsolated(page);
+			__ClearPageIsolated(page);
 		}
 
 		/*
@@ -1024,14 +1047,6 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 		 * altogether.
 		 */
 		if (current->flags & PF_MEMALLOC)
-			goto out;
-
-		/*
-		 * In "light" mode, we can wait for transient locks (eg
-		 * inserting a page into the page table), but it's not
-		 * worth waiting for I/O.
-		 */
-		if (mode == MIGRATE_SYNC_LIGHT && !PageUptodate(page))
 			goto out;
 
 		lock_page(page);
@@ -1173,7 +1188,7 @@ static int unmap_and_move(new_page_t get_new_page,
 		if (unlikely(__PageMovable(page))) {
 			lock_page(page);
 			if (!PageMovable(page))
-				ClearPageIsolated(page);
+				__ClearPageIsolated(page);
 			unlock_page(page);
 		}
 		goto out;
@@ -1228,7 +1243,7 @@ out:
 			if (PageMovable(page))
 				putback_movable_page(page);
 			else
-				ClearPageIsolated(page);
+				__ClearPageIsolated(page);
 			unlock_page(page);
 			put_page(page);
 		}
@@ -1419,8 +1434,6 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 	int swapwrite = current->flags & PF_SWAPWRITE;
 	int rc, nr_subpages;
 
-	trace_mm_migrate_pages_start(mode, reason);
-
 	if (!swapwrite)
 		current->flags |= PF_SWAPWRITE;
 
@@ -1526,7 +1539,6 @@ out:
 
 	return rc;
 }
-EXPORT_SYMBOL_GPL(migrate_pages);
 
 struct page *alloc_migration_target(struct page *page, unsigned long private)
 {
@@ -1669,7 +1681,7 @@ out_putpage:
 	 * isolate_lru_page() or drop the page ref if it was
 	 * not isolated.
 	 */
-	put_user_page(page);
+	put_page(page);
 out:
 	mmap_read_unlock(mm);
 	return err;
@@ -1716,7 +1728,7 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 	int start, i;
 	int err = 0, err1;
 
-	lru_cache_disable();
+	migrate_prep();
 
 	for (i = start = 0; i < nr_pages; i++) {
 		const void __user *p;
@@ -1785,7 +1797,6 @@ out_flush:
 	if (err >= 0)
 		err = err1;
 out:
-	lru_cache_enable();
 	return err;
 }
 
@@ -2063,7 +2074,7 @@ bool pmd_trans_migrating(pmd_t pmd)
  * node. Caller is expected to have an elevated reference count on
  * the page that will be dropped by this function before returning.
  */
-int migrate_misplaced_page(struct page *page, struct vm_fault *vmf,
+int migrate_misplaced_page(struct page *page, struct vm_area_struct *vma,
 			   int node)
 {
 	pg_data_t *pgdat = NODE_DATA(node);
@@ -2076,7 +2087,7 @@ int migrate_misplaced_page(struct page *page, struct vm_fault *vmf,
 	 * with execute permissions as they are probably shared libraries.
 	 */
 	if (page_mapcount(page) != 1 && page_is_file_lru(page) &&
-	    (vmf->vma_flags & VM_EXEC))
+	    (vma->vm_flags & VM_EXEC))
 		goto out;
 
 	/*

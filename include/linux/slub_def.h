@@ -7,7 +7,6 @@
  *
  * (C) 2007 SGI, Christoph Lameter
  */
-#include <linux/kfence.h>
 #include <linux/kobject.h>
 #include <linux/reciprocal_div.h>
 
@@ -110,7 +109,9 @@ struct kmem_cache {
 #ifdef CONFIG_SYSFS
 	struct kobject kobj;	/* For sysfs */
 #endif
+#ifdef CONFIG_SLAB_FREELIST_HARDENED
 	unsigned long random;
+#endif
 
 #ifdef CONFIG_NUMA
 	/*
@@ -119,7 +120,9 @@ struct kmem_cache {
 	unsigned int remote_node_defrag_ratio;
 #endif
 
+#ifdef CONFIG_SLAB_FREELIST_RANDOM
 	unsigned int *random_seq;
+#endif
 
 #ifdef CONFIG_KASAN
 	struct kasan_cache kasan_info;
@@ -182,8 +185,6 @@ static inline unsigned int __obj_to_index(const struct kmem_cache *cache,
 static inline unsigned int obj_to_index(const struct kmem_cache *cache,
 					const struct page *page, void *obj)
 {
-	if (is_kfence_address(obj))
-		return 0;
 	return __obj_to_index(cache, page_address(page), obj);
 }
 

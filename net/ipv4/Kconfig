@@ -469,7 +469,6 @@ config INET_DIAG_DESTROY
 
 menuconfig TCP_CONG_ADVANCED
 	bool "TCP: advanced congestion control"
-	default y
 	help
 	  Support for selection of various TCP congestion control
 	  modules.
@@ -483,7 +482,7 @@ if TCP_CONG_ADVANCED
 
 config TCP_CONG_BIC
 	tristate "Binary Increase Congestion (BIC) control"
-	default y
+	default m
 	help
 	  BIC-TCP is a sender-side only change that ensures a linear RTT
 	  fairness under large windows while offering both scalability and
@@ -505,7 +504,7 @@ config TCP_CONG_CUBIC
 
 config TCP_CONG_WESTWOOD
 	tristate "TCP Westwood+"
-	default y
+	default m
 	help
 	  TCP Westwood+ is a sender-side only modification of the TCP Reno
 	  protocol stack that optimizes the performance of TCP congestion
@@ -519,7 +518,7 @@ config TCP_CONG_WESTWOOD
 
 config TCP_CONG_HTCP
 	tristate "H-TCP"
-	default y
+	default m
 	help
 	  H-TCP is a send-side only modifications of the TCP Reno
 	  protocol stack that optimizes the performance of TCP
@@ -667,7 +666,7 @@ config TCP_CONG_CDG
 
 config TCP_CONG_BBR
 	tristate "BBR TCP"
-	default y
+	default n
 	help
 
 	  BBR (Bottleneck Bandwidth and RTT) TCP congestion control aims to

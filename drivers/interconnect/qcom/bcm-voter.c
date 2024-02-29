@@ -39,7 +39,7 @@ struct bcm_voter {
 	u32 tcs_wait;
 };
 
-static int cmp_vcd(void *priv, struct list_head *a, struct list_head *b)
+static int cmp_vcd(void *priv, const struct list_head *a, const struct list_head *b)
 {
 	const struct qcom_icc_bcm *bcm_a =
 			list_entry(a, struct qcom_icc_bcm, list);
@@ -90,6 +90,11 @@ static void bcm_aggregate(struct qcom_icc_bcm *bcm)
 
 		temp = agg_peak[bucket] * bcm->vote_scale;
 		bcm->vote_y[bucket] = bcm_div(temp, bcm->aux_data.unit);
+
+		if (bcm->enable_mask && (bcm->vote_x[bucket] || bcm->vote_y[bucket])) {
+			bcm->vote_x[bucket] = 0;
+			bcm->vote_y[bucket] = bcm->enable_mask;
+		}
 	}
 
 	if (bcm->keepalive && bcm->vote_x[QCOM_ICC_BUCKET_AMC] == 0 &&

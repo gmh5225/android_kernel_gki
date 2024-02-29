@@ -135,7 +135,6 @@
 #include <net/bpf_sk_storage.h>
 
 #include <trace/events/sock.h>
-#include <trace/hooks/sched.h>
 
 #include <net/tcp.h>
 #include <net/busy_poll.h>
@@ -533,7 +532,7 @@ struct dst_entry *__sk_dst_check(struct sock *sk, u32 cookie)
 
 	if (dst && dst->obsolete && dst->ops->check(dst, cookie) == NULL) {
 		sk_tx_queue_clear(sk);
-		sk->sk_dst_pending_confirm = 0;
+		WRITE_ONCE(sk->sk_dst_pending_confirm, 0);
 		RCU_INIT_POINTER(sk->sk_dst_cache, NULL);
 		dst_release(dst);
 		return NULL;
@@ -1617,13 +1616,6 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 		v.val = sk->sk_bound_dev_if;
 		break;
 
-	case SO_NETNS_COOKIE:
-		lv = sizeof(u64);
-		if (len != lv)
-			return -EINVAL;
-		v.val64 = atomic64_read(&sock_net(sk)->net_cookie);
-		break;
-
 	default:
 		/* We implement the SO_SNDLOWAT etc to not be settable
 		 * (1003.1g 7).
@@ -2403,6 +2395,7 @@ int __sock_cmsg_send(struct sock *sk, struct msghdr *msg, struct cmsghdr *cmsg,
 		sockc->mark = *(u32 *)CMSG_DATA(cmsg);
 		break;
 	case SO_TIMESTAMPING_OLD:
+	case SO_TIMESTAMPING_NEW:
 		if (cmsg->cmsg_len != CMSG_LEN(sizeof(u32)))
 			return -EINVAL;
 
@@ -2927,19 +2920,9 @@ void sock_def_readable(struct sock *sk)
 
 	rcu_read_lock();
 	wq = rcu_dereference(sk->sk_wq);
-
-	if (skwq_has_sleeper(wq)) {
-		int done = 0;
-
-		trace_android_vh_do_wake_up_sync(&wq->wait, &done);
-		if (done)
-			goto out;
-
+	if (skwq_has_sleeper(wq))
 		wake_up_interruptible_sync_poll(&wq->wait, EPOLLIN | EPOLLPRI |
 						EPOLLRDNORM | EPOLLRDBAND);
-	}
-
-out:
 	sk_wake_async(sk, SOCK_WAKE_WAITD, POLL_IN);
 	rcu_read_unlock();
 }

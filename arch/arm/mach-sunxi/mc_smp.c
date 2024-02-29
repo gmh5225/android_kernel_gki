@@ -814,10 +814,6 @@ static int __init sunxi_mc_smp_init(void)
 
 	is_a83t = sunxi_mc_smp_data[i].is_a83t;
 
-	of_node_put(node);
-	if (ret < 0)
-		return -ENODEV;
-
 	if (!sunxi_mc_smp_cpu_table_init())
 		return -EINVAL;
 

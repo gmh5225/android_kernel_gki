@@ -759,12 +759,12 @@ static inline bool fast_dput(struct dentry *dentry)
 	 */
 	if (unlikely(ret < 0)) {
 		spin_lock(&dentry->d_lock);
-		if (dentry->d_lockref.count > 1) {
-			dentry->d_lockref.count--;
+		if (WARN_ON_ONCE(dentry->d_lockref.count <= 0)) {
 			spin_unlock(&dentry->d_lock);
 			return true;
 		}
-		return false;
+		dentry->d_lockref.count--;
+		goto locked;
 	}
 
 	/*
@@ -815,6 +815,7 @@ static inline bool fast_dput(struct dentry *dentry)
 	 * else could have killed it and marked it dead. Either way, we
 	 * don't need to do anything else.
 	 */
+locked:
 	if (dentry->d_lockref.count) {
 		spin_unlock(&dentry->d_lock);
 		return true;
@@ -2110,7 +2111,7 @@ struct dentry *d_obtain_alias(struct inode *inode)
 {
 	return __d_obtain_alias(inode, true);
 }
-EXPORT_SYMBOL_NS(d_obtain_alias, ANDROID_GKI_VFS_EXPORT_ONLY);
+EXPORT_SYMBOL(d_obtain_alias);
 
 /**
  * d_obtain_root - find or allocate a dentry for a given inode
@@ -2184,7 +2185,7 @@ struct dentry *d_add_ci(struct dentry *dentry, struct inode *inode,
 	}
 	return found;
 }
-EXPORT_SYMBOL_NS(d_add_ci, ANDROID_GKI_VFS_EXPORT_ONLY);
+EXPORT_SYMBOL(d_add_ci);
 
 
 static inline bool d_same_name(const struct dentry *dentry,
@@ -3065,7 +3066,7 @@ out:
 	__d_add(dentry, inode);
 	return NULL;
 }
-EXPORT_SYMBOL_NS(d_splice_alias, ANDROID_GKI_VFS_EXPORT_ONLY);
+EXPORT_SYMBOL(d_splice_alias);
 
 /*
  * Test whether new_dentry is a subdirectory of old_dentry.

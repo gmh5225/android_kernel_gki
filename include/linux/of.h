@@ -108,7 +108,7 @@ static inline void of_node_init(struct device_node *node)
 #if defined(CONFIG_OF_KOBJ)
 	kobject_init(&node->kobj, &of_node_ktype);
 #endif
-	fwnode_init(&node->fwnode, &of_fwnode_ops);
+	node->fwnode.ops = &of_fwnode_ops;
 }
 
 #if defined(CONFIG_OF_KOBJ)
@@ -789,11 +789,6 @@ static inline int of_machine_is_compatible(const char *compat)
 	return 0;
 }
 
-static inline int of_add_property(struct device_node *np, struct property *prop)
-{
-	return 0;
-}
-
 static inline int of_remove_property(struct device_node *np, struct property *prop)
 {
 	return 0;
@@ -926,7 +921,9 @@ static inline bool of_node_is_type(const struct device_node *np, const char *typ
  * @propname:	name of the property to be searched.
  *
  * Search for a property in a device node and count the number of u8 elements
- * in it. Returns number of elements on sucess, -EINVAL if the property does
+ * in it.
+ *
+ * Return: The number of elements on sucess, -EINVAL if the property does
  * not exist or its length does not match a multiple of u8 and -ENODATA if the
  * property does not have a value.
  */
@@ -943,7 +940,9 @@ static inline int of_property_count_u8_elems(const struct device_node *np,
  * @propname:	name of the property to be searched.
  *
  * Search for a property in a device node and count the number of u16 elements
- * in it. Returns number of elements on sucess, -EINVAL if the property does
+ * in it.
+ *
+ * Return: The number of elements on sucess, -EINVAL if the property does
  * not exist or its length does not match a multiple of u16 and -ENODATA if the
  * property does not have a value.
  */
@@ -960,7 +959,9 @@ static inline int of_property_count_u16_elems(const struct device_node *np,
  * @propname:	name of the property to be searched.
  *
  * Search for a property in a device node and count the number of u32 elements
- * in it. Returns number of elements on sucess, -EINVAL if the property does
+ * in it.
+ *
+ * Return: The number of elements on sucess, -EINVAL if the property does
  * not exist or its length does not match a multiple of u32 and -ENODATA if the
  * property does not have a value.
  */
@@ -977,7 +978,9 @@ static inline int of_property_count_u32_elems(const struct device_node *np,
  * @propname:	name of the property to be searched.
  *
  * Search for a property in a device node and count the number of u64 elements
- * in it. Returns number of elements on sucess, -EINVAL if the property does
+ * in it.
+ *
+ * Return: The number of elements on sucess, -EINVAL if the property does
  * not exist or its length does not match a multiple of u64 and -ENODATA if the
  * property does not have a value.
  */
@@ -998,7 +1001,7 @@ static inline int of_property_count_u64_elems(const struct device_node *np,
  * Search for a property in a device tree node and retrieve a list of
  * terminated string values (pointer to data, not a copy) in that property.
  *
- * If @out_strs is NULL, the number of strings in the property is returned.
+ * Return: If @out_strs is NULL, the number of strings in the property is returned.
  */
 static inline int of_property_read_string_array(const struct device_node *np,
 						const char *propname, const char **out_strs,
@@ -1014,10 +1017,11 @@ static inline int of_property_read_string_array(const struct device_node *np,
  * @propname:	name of the property to be searched.
  *
  * Search for a property in a device tree node and retrieve the number of null
- * terminated string contain in it. Returns the number of strings on
- * success, -EINVAL if the property does not exist, -ENODATA if property
- * does not have a value, and -EILSEQ if the string is not null-terminated
- * within the length of the property data.
+ * terminated string contain in it.
+ *
+ * Return: The number of strings on success, -EINVAL if the property does not
+ * exist, -ENODATA if property does not have a value, and -EILSEQ if the string
+ * is not null-terminated within the length of the property data.
  */
 static inline int of_property_count_strings(const struct device_node *np,
 					    const char *propname)
@@ -1037,7 +1041,8 @@ static inline int of_property_count_strings(const struct device_node *np,
  * Search for a property in a device tree node and retrieve a null
  * terminated string value (pointer to data, not a copy) in the list of strings
  * contained in that property.
- * Returns 0 on success, -EINVAL if the property does not exist, -ENODATA if
+ *
+ * Return: 0 on success, -EINVAL if the property does not exist, -ENODATA if
  * property does not have a value, and -EILSEQ if the string is not
  * null-terminated within the length of the property data.
  *
@@ -1443,7 +1448,7 @@ static inline int of_reconfig_get_state_change(unsigned long action,
  * of_device_is_system_power_controller - Tells if system-power-controller is found for device_node
  * @np: Pointer to the given device_node
  *
- * return true if present false otherwise
+ * Return: true if present false otherwise
  */
 static inline bool of_device_is_system_power_controller(const struct device_node *np)
 {

@@ -34,7 +34,6 @@
 #include <linux/bitops.h>
 #include <linux/rbtree_augmented.h>
 #include <linux/overflow.h>
-#include <trace/hooks/mm.h>
 
 #include <linux/uaccess.h>
 #include <asm/tlbflush.h>
@@ -327,7 +326,6 @@ int map_kernel_range(unsigned long start, unsigned long size, pgprot_t prot,
 	flush_cache_vmap(start, start + size);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(map_kernel_range);
 
 int is_vmalloc_or_module_addr(const void *x)
 {
@@ -415,12 +413,9 @@ static DEFINE_SPINLOCK(vmap_area_lock);
 static DEFINE_SPINLOCK(free_vmap_area_lock);
 /* Export for kexec only */
 LIST_HEAD(vmap_area_list);
+static LLIST_HEAD(vmap_purge_list);
 static struct rb_root vmap_area_root = RB_ROOT;
 static bool vmap_initialized __read_mostly;
-
-static struct rb_root purge_vmap_area_root = RB_ROOT;
-static LIST_HEAD(purge_vmap_area_list);
-static DEFINE_SPINLOCK(purge_vmap_area_lock);
 
 /*
  * This kmem_cache is used for vmap_area objects. Instead of
@@ -493,29 +488,6 @@ static atomic_long_t nr_vmalloc_pages;
 unsigned long vmalloc_nr_pages(void)
 {
 	return atomic_long_read(&nr_vmalloc_pages);
-}
-EXPORT_SYMBOL_GPL(vmalloc_nr_pages);
-
-static struct vmap_area *find_vmap_area_exceed_addr(unsigned long addr)
-{
-	struct vmap_area *va = NULL;
-	struct rb_node *n = vmap_area_root.rb_node;
-
-	while (n) {
-		struct vmap_area *tmp;
-
-		tmp = rb_entry(n, struct vmap_area, rb_node);
-		if (tmp->va_end > addr) {
-			va = tmp;
-			if (tmp->va_start <= addr)
-				break;
-
-			n = n->rb_left;
-		} else
-			n = n->rb_right;
-	}
-
-	return va;
 }
 
 static struct vmap_area *__find_vmap_area(unsigned long addr)
@@ -848,17 +820,10 @@ insert:
 	if (!merged)
 		link_va(va, root, parent, link, head);
 
-	return va;
-}
-
-static __always_inline struct vmap_area *
-merge_or_add_vmap_area_augment(struct vmap_area *va,
-	struct rb_root *root, struct list_head *head)
-{
-	va = merge_or_add_vmap_area(va, root, head);
-	if (va)
-		augment_tree_propagate_from(va);
-
+	/*
+	 * Last step is to check and update the tree.
+	 */
+	augment_tree_propagate_from(va);
 	return va;
 }
 
@@ -1173,7 +1138,7 @@ static void free_vmap_area(struct vmap_area *va)
 	 * Insert/Merge it back to the free tree/list.
 	 */
 	spin_lock(&free_vmap_area_lock);
-	merge_or_add_vmap_area_augment(va, &free_vmap_area_root, &free_vmap_area_list);
+	merge_or_add_vmap_area(va, &free_vmap_area_root, &free_vmap_area_list);
 	spin_unlock(&free_vmap_area_lock);
 }
 
@@ -1309,7 +1274,6 @@ int unregister_vmap_purge_notifier(struct notifier_block *nb)
 }
 EXPORT_SYMBOL_GPL(unregister_vmap_purge_notifier);
 
-bool lazy_vunmap_enable  __read_mostly = true;
 /*
  * lazy_max_pages is the maximum amount of virtual address space we gather up
  * before attempting to purge with a TLB flush.
@@ -1329,9 +1293,6 @@ bool lazy_vunmap_enable  __read_mostly = true;
 static unsigned long lazy_max_pages(void)
 {
 	unsigned int log;
-
-	if (!lazy_vunmap_enable)
-		return 0;
 
 	log = fls(num_online_cpus());
 
@@ -1365,32 +1326,32 @@ void set_iounmap_nonlazy(void)
 static bool __purge_vmap_area_lazy(unsigned long start, unsigned long end)
 {
 	unsigned long resched_threshold;
-	struct list_head local_pure_list;
-	struct vmap_area *va, *n_va;
+	struct llist_node *valist;
+	struct vmap_area *va;
+	struct vmap_area *n_va;
 
 	lockdep_assert_held(&vmap_purge_lock);
 
-	spin_lock(&purge_vmap_area_lock);
-	purge_vmap_area_root = RB_ROOT;
-	list_replace_init(&purge_vmap_area_list, &local_pure_list);
-	spin_unlock(&purge_vmap_area_lock);
-
-	if (unlikely(list_empty(&local_pure_list)))
+	valist = llist_del_all(&vmap_purge_list);
+	if (unlikely(valist == NULL))
 		return false;
 
-	start = min(start,
-		list_first_entry(&local_pure_list,
-			struct vmap_area, list)->va_start);
-
-	end = max(end,
-		list_last_entry(&local_pure_list,
-			struct vmap_area, list)->va_end);
+	/*
+	 * TODO: to calculate a flush range without looping.
+	 * The list can be up to lazy_max_pages() elements.
+	 */
+	llist_for_each_entry(va, valist, purge_list) {
+		if (va->va_start < start)
+			start = va->va_start;
+		if (va->va_end > end)
+			end = va->va_end;
+	}
 
 	flush_tlb_kernel_range(start, end);
 	resched_threshold = lazy_max_pages() << 1;
 
 	spin_lock(&free_vmap_area_lock);
-	list_for_each_entry_safe(va, n_va, &local_pure_list, list) {
+	llist_for_each_entry_safe(va, n_va, valist, purge_list) {
 		unsigned long nr = (va->va_end - va->va_start) >> PAGE_SHIFT;
 		unsigned long orig_start = va->va_start;
 		unsigned long orig_end = va->va_end;
@@ -1400,8 +1361,8 @@ static bool __purge_vmap_area_lazy(unsigned long start, unsigned long end)
 		 * detached and there is no need to "unlink" it from
 		 * anything.
 		 */
-		va = merge_or_add_vmap_area_augment(va, &free_vmap_area_root,
-				&free_vmap_area_list);
+		va = merge_or_add_vmap_area(va, &free_vmap_area_root,
+					    &free_vmap_area_list);
 
 		if (!va)
 			continue;
@@ -1458,15 +1419,9 @@ static void free_vmap_area_noflush(struct vmap_area *va)
 	nr_lazy = atomic_long_add_return((va->va_end - va->va_start) >>
 				PAGE_SHIFT, &vmap_lazy_nr);
 
-	/*
-	 * Merge or place it to the purge tree/list.
-	 */
-	spin_lock(&purge_vmap_area_lock);
-	merge_or_add_vmap_area(va,
-		&purge_vmap_area_root, &purge_vmap_area_list);
-	spin_unlock(&purge_vmap_area_lock);
-
 	/* After this point, we may free va at any time */
+	llist_add(&va->purge_list, &vmap_purge_list);
+
 	if (unlikely(nr_lazy > lazy_max_pages()))
 		try_purge_vmap_area_lazy();
 }
@@ -1791,7 +1746,7 @@ static void _vm_unmap_aliases(unsigned long start, unsigned long end, int flush)
 		rcu_read_lock();
 		list_for_each_entry_rcu(vb, &vbq->free, free_list) {
 			spin_lock(&vb->lock);
-			if (vb->dirty && vb->dirty != VMAP_BBMAP_BITS) {
+			if (vb->dirty) {
 				unsigned long va_start = vb->va->va_start;
 				unsigned long s, e;
 
@@ -2077,7 +2032,6 @@ static inline void setup_vmalloc_vm_locked(struct vm_struct *vm,
 	vm->size = va->va_end - va->va_start;
 	vm->caller = caller;
 	va->vm = vm;
-	trace_android_vh_save_vmalloc_stack(flags, vm);
 }
 
 static void setup_vmalloc_vm(struct vm_struct *vm, struct vmap_area *va,
@@ -2143,7 +2097,6 @@ struct vm_struct *__get_vm_area_caller(unsigned long size, unsigned long flags,
 	return __get_vm_area_node(size, 1, flags, start, end, NUMA_NO_NODE,
 				  GFP_KERNEL, caller);
 }
-EXPORT_SYMBOL_GPL(__get_vm_area_caller);
 
 /**
  * get_vm_area - reserve a contiguous kernel virtual area
@@ -2212,7 +2165,6 @@ struct vm_struct *remove_vm_area(const void *addr)
 	if (va && va->vm) {
 		struct vm_struct *vm = va->vm;
 
-		trace_android_vh_remove_vmalloc_stack(vm);
 		va->vm = NULL;
 		spin_unlock(&vmap_area_lock);
 
@@ -2531,7 +2483,8 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 	}
 
 	if (!pages) {
-		free_vm_area(area);
+		remove_vm_area(area->addr);
+		kfree(area);
 		return NULL;
 	}
 
@@ -2929,15 +2882,7 @@ long vread(char *buf, char *addr, unsigned long count)
 		count = -(unsigned long) addr;
 
 	spin_lock(&vmap_area_lock);
-	va = find_vmap_area_exceed_addr((unsigned long)addr);
-	if (!va)
-		goto finished;
-
-	/* no intersects with alive vmap_area */
-	if ((unsigned long)addr + count <= va->va_start)
-		goto finished;
-
-	list_for_each_entry_from(va, &vmap_area_list, list) {
+	list_for_each_entry(va, &vmap_area_list, list) {
 		if (!count)
 			break;
 
@@ -3411,8 +3356,8 @@ recovery:
 	while (area--) {
 		orig_start = vas[area]->va_start;
 		orig_end = vas[area]->va_end;
-		va = merge_or_add_vmap_area_augment(vas[area], &free_vmap_area_root,
-				&free_vmap_area_list);
+		va = merge_or_add_vmap_area(vas[area], &free_vmap_area_root,
+					    &free_vmap_area_list);
 		if (va)
 			kasan_release_vmalloc(orig_start, orig_end,
 				va->va_start, va->va_end);
@@ -3461,8 +3406,8 @@ err_free_shadow:
 	for (area = 0; area < nr_vms; area++) {
 		orig_start = vas[area]->va_start;
 		orig_end = vas[area]->va_end;
-		va = merge_or_add_vmap_area_augment(vas[area], &free_vmap_area_root,
-				&free_vmap_area_list);
+		va = merge_or_add_vmap_area(vas[area], &free_vmap_area_root,
+					    &free_vmap_area_list);
 		if (va)
 			kasan_release_vmalloc(orig_start, orig_end,
 				va->va_start, va->va_end);
@@ -3542,15 +3487,18 @@ static void show_numa_info(struct seq_file *m, struct vm_struct *v)
 
 static void show_purge_info(struct seq_file *m)
 {
+	struct llist_node *head;
 	struct vmap_area *va;
 
-	spin_lock(&purge_vmap_area_lock);
-	list_for_each_entry(va, &purge_vmap_area_list, list) {
+	head = READ_ONCE(vmap_purge_list.first);
+	if (head == NULL)
+		return;
+
+	llist_for_each_entry(va, head, purge_list) {
 		seq_printf(m, "0x%pK-0x%pK %7ld unpurged vm_area\n",
 			(void *)va->va_start, (void *)va->va_end,
 			va->va_end - va->va_start);
 	}
-	spin_unlock(&purge_vmap_area_lock);
 }
 
 static int s_show(struct seq_file *m, void *p)
@@ -3605,11 +3553,13 @@ static int s_show(struct seq_file *m, void *p)
 		seq_puts(m, " vpages");
 
 	show_numa_info(m, v);
-	trace_android_vh_show_stack_hash(m, v);
 	seq_putc(m, '\n');
 
 	/*
-	 * As a final step, dump "unpurged" areas.
+	 * As a final step, dump "unpurged" areas. Note,
+	 * that entire "/proc/vmallocinfo" output will not
+	 * be address sorted, because the purge list is not
+	 * sorted.
 	 */
 	if (list_is_last(&va->list, &vmap_area_list))
 		show_purge_info(m);

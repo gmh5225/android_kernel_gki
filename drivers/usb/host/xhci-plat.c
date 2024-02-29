@@ -184,41 +184,6 @@ static const struct of_device_id usb_xhci_of_match[] = {
 MODULE_DEVICE_TABLE(of, usb_xhci_of_match);
 #endif
 
-static struct xhci_plat_priv_overwrite xhci_plat_vendor_overwrite;
-
-int xhci_plat_register_vendor_ops(struct xhci_vendor_ops *vendor_ops)
-{
-	if (vendor_ops == NULL)
-		return -EINVAL;
-
-	xhci_plat_vendor_overwrite.vendor_ops = vendor_ops;
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(xhci_plat_register_vendor_ops);
-
-static int xhci_vendor_init(struct xhci_hcd *xhci)
-{
-	struct xhci_vendor_ops *ops = NULL;
-
-	if (xhci_plat_vendor_overwrite.vendor_ops)
-		ops = xhci->vendor_ops = xhci_plat_vendor_overwrite.vendor_ops;
-
-	if (ops && ops->vendor_init)
-		return ops->vendor_init(xhci);
-	return 0;
-}
-
-static void xhci_vendor_cleanup(struct xhci_hcd *xhci)
-{
-	struct xhci_vendor_ops *ops = xhci_vendor_get_ops(xhci);
-
-	if (ops && ops->vendor_cleanup)
-		ops->vendor_cleanup(xhci);
-
-	xhci->vendor_ops = NULL;
-}
-
 static int xhci_plat_probe(struct platform_device *pdev)
 {
 	const struct xhci_plat_priv *priv_match;
@@ -358,6 +323,9 @@ static int xhci_plat_probe(struct platform_device *pdev)
 		if (device_property_read_bool(tmpdev, "quirk-broken-port-ped"))
 			xhci->quirks |= XHCI_BROKEN_PORT_PED;
 
+		if (device_property_read_bool(tmpdev, "xhci-sg-trb-cache-size-quirk"))
+			xhci->quirks |= XHCI_SG_TRB_CACHE_SIZE_QUIRK;
+
 		device_property_read_u32(tmpdev, "imod-interval-ns",
 					 &xhci->imod_interval);
 	}
@@ -373,10 +341,6 @@ static int xhci_plat_probe(struct platform_device *pdev)
 		if (ret)
 			goto put_usb3_hcd;
 	}
-
-	ret = xhci_vendor_init(xhci);
-	if (ret)
-		goto disable_usb_phy;
 
 	hcd->tpl_support = of_usb_host_tpl_support(sysdev->of_node);
 	xhci->shared_hcd->tpl_support = hcd->tpl_support;
@@ -457,10 +421,8 @@ static int xhci_plat_remove(struct platform_device *dev)
 	usb_phy_shutdown(hcd->usb_phy);
 
 	usb_remove_hcd(hcd);
-
-	xhci_vendor_cleanup(xhci);
-
 	usb_put_hcd(shared_hcd);
+
 	clk_disable_unprepare(clk);
 	clk_disable_unprepare(reg_clk);
 	usb_put_hcd(hcd);
@@ -507,23 +469,38 @@ static int __maybe_unused xhci_plat_resume(struct device *dev)
 	int ret;
 
 	if (!device_may_wakeup(dev) && (xhci->quirks & XHCI_SUSPEND_RESUME_CLKS)) {
-		clk_prepare_enable(xhci->clk);
-		clk_prepare_enable(xhci->reg_clk);
+		ret = clk_prepare_enable(xhci->clk);
+		if (ret)
+			return ret;
+
+		ret = clk_prepare_enable(xhci->reg_clk);
+		if (ret) {
+			clk_disable_unprepare(xhci->clk);
+			return ret;
+		}
 	}
 
 	ret = xhci_priv_resume_quirk(hcd);
 	if (ret)
-		return ret;
+		goto disable_clks;
 
 	ret = xhci_resume(xhci, 0);
 	if (ret)
-		return ret;
+		goto disable_clks;
 
 	pm_runtime_disable(dev);
 	pm_runtime_set_active(dev);
 	pm_runtime_enable(dev);
 
 	return 0;
+
+disable_clks:
+	if (!device_may_wakeup(dev) && (xhci->quirks & XHCI_SUSPEND_RESUME_CLKS)) {
+		clk_disable_unprepare(xhci->clk);
+		clk_disable_unprepare(xhci->reg_clk);
+	}
+
+	return ret;
 }
 
 static int __maybe_unused xhci_plat_runtime_suspend(struct device *dev)

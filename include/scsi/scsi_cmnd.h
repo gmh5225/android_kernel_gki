@@ -11,7 +11,6 @@
 #include <linux/scatterlist.h>
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_request.h>
-#include <linux/android_kabi.h>
 
 struct Scsi_Host;
 struct scsi_driver;
@@ -143,12 +142,13 @@ struct scsi_cmnd {
 
 	unsigned char tag;	/* SCSI-II queued command tag */
 	unsigned int extra_len;	/* length of alignment and padding */
-
-	ANDROID_KABI_RESERVE(1);
-	ANDROID_KABI_RESERVE(2);
-	ANDROID_KABI_RESERVE(3);
-	ANDROID_KABI_RESERVE(4);
 };
+
+/* Variant of blk_mq_rq_from_pdu() that verifies the type of its argument. */
+static inline struct request *scsi_cmd_to_rq(struct scsi_cmnd *scmd)
+{
+	return blk_mq_rq_from_pdu(scmd);
+}
 
 /*
  * Return the driver private allocation behind the command.

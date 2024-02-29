@@ -613,7 +613,6 @@ static void ucsi_unregister_partner(struct ucsi_connector *con)
 
 static void ucsi_partner_change(struct ucsi_connector *con)
 {
-	enum usb_role u_role = USB_ROLE_NONE;
 	int ret;
 
 	if (!con->partner)
@@ -621,14 +620,11 @@ static void ucsi_partner_change(struct ucsi_connector *con)
 
 	switch (UCSI_CONSTAT_PARTNER_TYPE(con->status.flags)) {
 	case UCSI_CONSTAT_PARTNER_TYPE_UFP:
-	case UCSI_CONSTAT_PARTNER_TYPE_CABLE_AND_UFP:
-		u_role = USB_ROLE_HOST;
-		fallthrough;
 	case UCSI_CONSTAT_PARTNER_TYPE_CABLE:
+	case UCSI_CONSTAT_PARTNER_TYPE_CABLE_AND_UFP:
 		typec_set_data_role(con->port, TYPEC_HOST);
 		break;
 	case UCSI_CONSTAT_PARTNER_TYPE_DFP:
-		u_role = USB_ROLE_DEVICE;
 		typec_set_data_role(con->port, TYPEC_DEVICE);
 		break;
 	default:
@@ -638,15 +634,6 @@ static void ucsi_partner_change(struct ucsi_connector *con)
 	/* Complete pending data role swap */
 	if (!completion_done(&con->complete))
 		complete(&con->complete);
-
-	/* Only notify USB controller if partner supports USB data */
-	if (!(UCSI_CONSTAT_PARTNER_FLAGS(con->status.flags) & UCSI_CONSTAT_PARTNER_FLAG_USB))
-		u_role = USB_ROLE_NONE;
-
-	ret = usb_role_switch_set_role(con->usb_role_sw, u_role);
-	if (ret)
-		dev_err(con->ucsi->dev, "con:%d: failed to set usb role:%d\n",
-			con->num, u_role);
 
 	/* Can't rely on Partner Flags field. Always checking the alt modes. */
 	ret = ucsi_register_altmodes(con, UCSI_RECIPIENT_SOP);
@@ -666,7 +653,6 @@ static void ucsi_handle_connector_change(struct work_struct *work)
 	struct ucsi_connector_status pre_ack_status;
 	struct ucsi_connector_status post_ack_status;
 	enum typec_role role;
-	enum usb_role u_role = USB_ROLE_NONE;
 	u16 inferred_changes;
 	u16 changed_flags;
 	u64 command;
@@ -792,14 +778,11 @@ static void ucsi_handle_connector_change(struct work_struct *work)
 
 		switch (UCSI_CONSTAT_PARTNER_TYPE(con->status.flags)) {
 		case UCSI_CONSTAT_PARTNER_TYPE_UFP:
-		case UCSI_CONSTAT_PARTNER_TYPE_CABLE_AND_UFP:
-			u_role = USB_ROLE_HOST;
-			fallthrough;
 		case UCSI_CONSTAT_PARTNER_TYPE_CABLE:
+		case UCSI_CONSTAT_PARTNER_TYPE_CABLE_AND_UFP:
 			typec_set_data_role(con->port, TYPEC_HOST);
 			break;
 		case UCSI_CONSTAT_PARTNER_TYPE_DFP:
-			u_role = USB_ROLE_DEVICE;
 			typec_set_data_role(con->port, TYPEC_DEVICE);
 			break;
 		default:
@@ -812,16 +795,6 @@ static void ucsi_handle_connector_change(struct work_struct *work)
 			ucsi_unregister_partner(con);
 
 		ucsi_port_psy_changed(con);
-
-		/* Only notify USB controller if partner supports USB data */
-		if (!(UCSI_CONSTAT_PARTNER_FLAGS(con->status.flags) &
-				UCSI_CONSTAT_PARTNER_FLAG_USB))
-			u_role = USB_ROLE_NONE;
-
-		ret = usb_role_switch_set_role(con->usb_role_sw, u_role);
-		if (ret)
-			dev_err(ucsi->dev, "con:%d: failed to set usb role:%d\n",
-				con->num, u_role);
 	}
 
 	if (con->status.change & UCSI_CONSTAT_PARTNER_CHANGE)
@@ -1051,7 +1024,6 @@ static int ucsi_register_port(struct ucsi *ucsi, int index)
 	struct ucsi_connector *con = &ucsi->connector[index];
 	struct typec_capability *cap = &con->typec_cap;
 	enum typec_accessory *accessory = cap->accessory;
-	enum usb_role u_role = USB_ROLE_NONE;
 	u64 command;
 	int ret;
 
@@ -1060,15 +1032,6 @@ static int ucsi_register_port(struct ucsi *ucsi, int index)
 	mutex_init(&con->lock);
 	con->num = index + 1;
 	con->ucsi = ucsi;
-
-	cap->fwnode = ucsi_find_fwnode(con);
-	con->usb_role_sw = fwnode_usb_role_switch_get(cap->fwnode);
-	if (IS_ERR(con->usb_role_sw)) {
-		dev_err(ucsi->dev, "con%d: failed to get usb role switch\n",
-			con->num);
-		return PTR_ERR(con->usb_role_sw);
-	}
-
 
 	/* Delay other interactions with the con until registration is complete */
 	mutex_lock(&con->lock);
@@ -1097,7 +1060,6 @@ static int ucsi_register_port(struct ucsi *ucsi, int index)
 
 	cap->revision = ucsi->cap.typec_version;
 	cap->pd_revision = ucsi->cap.pd_version;
-	cap->svdm_version = SVDM_VER_2_0;
 	cap->prefer_role = TYPEC_NO_PREFERRED_ROLE;
 
 	if (con->cap.op_mode & UCSI_CONCAP_OPMODE_AUDIO_ACCESSORY)
@@ -1105,6 +1067,7 @@ static int ucsi_register_port(struct ucsi *ucsi, int index)
 	if (con->cap.op_mode & UCSI_CONCAP_OPMODE_DEBUG_ACCESSORY)
 		*accessory = TYPEC_ACCESSORY_DEBUG;
 
+	cap->fwnode = ucsi_find_fwnode(con);
 	cap->driver_data = con;
 	cap->ops = &ucsi_ops;
 
@@ -1139,14 +1102,11 @@ static int ucsi_register_port(struct ucsi *ucsi, int index)
 
 	switch (UCSI_CONSTAT_PARTNER_TYPE(con->status.flags)) {
 	case UCSI_CONSTAT_PARTNER_TYPE_UFP:
-	case UCSI_CONSTAT_PARTNER_TYPE_CABLE_AND_UFP:
-		u_role = USB_ROLE_HOST;
-		fallthrough;
 	case UCSI_CONSTAT_PARTNER_TYPE_CABLE:
+	case UCSI_CONSTAT_PARTNER_TYPE_CABLE_AND_UFP:
 		typec_set_data_role(con->port, TYPEC_HOST);
 		break;
 	case UCSI_CONSTAT_PARTNER_TYPE_DFP:
-		u_role = USB_ROLE_DEVICE;
 		typec_set_data_role(con->port, TYPEC_DEVICE);
 		break;
 	default:
@@ -1160,17 +1120,6 @@ static int ucsi_register_port(struct ucsi *ucsi, int index)
 		ucsi_pwr_opmode_change(con);
 		ucsi_register_partner(con);
 		ucsi_port_psy_changed(con);
-	}
-
-	/* Only notify USB controller if partner supports USB data */
-	if (!(UCSI_CONSTAT_PARTNER_FLAGS(con->status.flags) & UCSI_CONSTAT_PARTNER_FLAG_USB))
-		u_role = USB_ROLE_NONE;
-
-	ret = usb_role_switch_set_role(con->usb_role_sw, u_role);
-	if (ret) {
-		dev_err(ucsi->dev, "con:%d: failed to set usb role:%d\n",
-			con->num, u_role);
-		ret = 0;
 	}
 
 	if (con->partner) {
@@ -1275,21 +1224,12 @@ err:
 
 static void ucsi_init_work(struct work_struct *work)
 {
-	struct ucsi_android *aucsi = container_of(work,
-				    struct ucsi_android, work.work);
+	struct ucsi *ucsi = container_of(work, struct ucsi, work);
 	int ret;
 
-	ret = ucsi_init(&aucsi->ucsi);
+	ret = ucsi_init(ucsi);
 	if (ret)
-		dev_err(aucsi->ucsi.dev, "PPM init failed (%d)\n", ret);
-
-	if (ret == -EPROBE_DEFER) {
-		if (aucsi->work_count++ > UCSI_ROLE_SWITCH_WAIT_COUNT)
-			return;
-
-		queue_delayed_work(system_long_wq, &aucsi->work,
-				   UCSI_ROLE_SWITCH_INTERVAL);
-	}
+		dev_err(ucsi->dev, "PPM init failed (%d)\n", ret);
 }
 
 /**
@@ -1321,17 +1261,15 @@ EXPORT_SYMBOL_GPL(ucsi_set_drvdata);
 struct ucsi *ucsi_create(struct device *dev, const struct ucsi_operations *ops)
 {
 	struct ucsi *ucsi;
-	struct ucsi_android *aucsi;
 
 	if (!ops || !ops->read || !ops->sync_write || !ops->async_write)
 		return ERR_PTR(-EINVAL);
 
-	aucsi = kzalloc(sizeof(*aucsi), GFP_KERNEL);
-	if (!aucsi)
+	ucsi = kzalloc(sizeof(*ucsi), GFP_KERNEL);
+	if (!ucsi)
 		return ERR_PTR(-ENOMEM);
 
-	ucsi = &aucsi->ucsi;
-	INIT_DELAYED_WORK(&aucsi->work, ucsi_init_work);
+	INIT_WORK(&ucsi->work, ucsi_init_work);
 	mutex_init(&ucsi->ppm_lock);
 	ucsi->dev = dev;
 	ucsi->ops = ops;
@@ -1346,9 +1284,7 @@ EXPORT_SYMBOL_GPL(ucsi_create);
  */
 void ucsi_destroy(struct ucsi *ucsi)
 {
-	struct ucsi_android *aucsi = container_of(ucsi,
-				    struct ucsi_android, ucsi);
-	kfree(aucsi);
+	kfree(ucsi);
 }
 EXPORT_SYMBOL_GPL(ucsi_destroy);
 
@@ -1358,8 +1294,6 @@ EXPORT_SYMBOL_GPL(ucsi_destroy);
  */
 int ucsi_register(struct ucsi *ucsi)
 {
-	struct ucsi_android *aucsi = container_of(ucsi,
-				    struct ucsi_android, ucsi);
 	int ret;
 
 	ret = ucsi->ops->read(ucsi, UCSI_VERSION, &ucsi->version,
@@ -1370,7 +1304,7 @@ int ucsi_register(struct ucsi *ucsi)
 	if (!ucsi->version)
 		return -ENODEV;
 
-	queue_delayed_work(system_long_wq, &aucsi->work, 0);
+	queue_work(system_long_wq, &ucsi->work);
 
 	return 0;
 }
@@ -1384,13 +1318,11 @@ EXPORT_SYMBOL_GPL(ucsi_register);
  */
 void ucsi_unregister(struct ucsi *ucsi)
 {
-	struct ucsi_android *aucsi = container_of(ucsi,
-				    struct ucsi_android, ucsi);
 	u64 cmd = UCSI_SET_NOTIFICATION_ENABLE;
 	int i;
 
 	/* Make sure that we are not in the middle of driver initialization */
-	cancel_delayed_work_sync(&aucsi->work);
+	cancel_work_sync(&ucsi->work);
 
 	/* Disable notifications */
 	ucsi->ops->async_write(ucsi, UCSI_CONTROL, &cmd, sizeof(cmd));

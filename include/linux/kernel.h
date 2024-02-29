@@ -491,11 +491,7 @@ static inline char *hex_byte_pack_upper(char *buf, u8 byte)
 	return buf;
 }
 
-#ifdef __GENKSYMS__
-extern int hex_to_bin(char ch);
-#else
 extern int hex_to_bin(unsigned char ch);
-#endif
 extern int __must_check hex2bin(u8 *dst, const char *src, size_t count);
 extern char *bin2hex(char *dst, const void *src, size_t count);
 
@@ -577,9 +573,6 @@ do {									\
  * let gcc optimize the rest.
  */
 
-#ifdef CONFIG_DISABLE_TRACE_PRINTK
-#define trace_printk pr_debug
-#else
 #define trace_printk(fmt, ...)				\
 do {							\
 	char _______STR[] = __stringify((__VA_ARGS__));	\
@@ -602,7 +595,6 @@ do {									\
 	else								\
 		__trace_printk(_THIS_IP_, fmt, ##args);			\
 } while (0)
-#endif
 
 extern __printf(2, 3)
 int __trace_bprintk(unsigned long ip, const char *fmt, ...);
