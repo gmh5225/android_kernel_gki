@@ -5,12 +5,12 @@
 DIR=`readlink -f .`
 PARENT_DIR=`readlink -f ${DIR}/..`
 
-export CROSS_COMPILE=$PARENT_DIR/tc/clang-r487747c/bin/aarch64-linux-gnu-
-export CC=$PARENT_DIR/tc/clang-r487747c/bin/clang
+export CROSS_COMPILE=$PARENT_DIR/tc/zyc-19/bin/aarch64-linux-gnu-
+export CC=$PARENT_DIR/tc/zyc-19/bin/clang
 
 export PLATFORM_VERSION=14
 export ANDROID_MAJOR_VERSION=s
-export PATH=$PARENT_DIR/tc/clang-r487747c/bin:$PATH
+export PATH=$PARENT_DIR/tc/zyc-19/bin:$PATH
 export PATH=$PARENT_DIR/tc/build-tools/path/linux-x86:$PATH
 export PATH=$PARENT_DIR/tc/gas/linux-x86:$PATH
 export TARGET_SOC=s5e9925
